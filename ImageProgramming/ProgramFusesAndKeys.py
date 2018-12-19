@@ -25,12 +25,35 @@ otp_size = 1024
 
 def not_8(x): return x ^ 0xff
 
-fuse_fields = {
-	'DAC_Calibration_Word': (16, 20),
-	'ADC_Calibration_Word': (24, 28)
-}
+def bit_check(current_fuse_array, fuse_array_to_program, field):
 
-def check_field(current_fuse_array, fuse_array_to_program, field):
+	curr = current_fuse_array[fuse_fields[field][0]]
+	to_prog = fuse_array_to_program[fuse_fields[field][0]]
+
+	list_of_bits = fuse_fields[field][3]
+	
+	for i in list_of_bits:
+		if ((1 << i) & curr) != 0 and ((1 << i) & to_prog) == 0: 
+			raise Exception("Error: bit %d in %s is already programmed" % (i, field))
+
+	return fuse_array_to_program
+
+def nubble_parity_check(current_fuse_array, fuse_array_to_program, field):
+
+	curr = current_fuse_array[fuse_fields[field][0]:fuse_fields[field][1]]
+	to_prog = fuse_array_to_program[fuse_fields[field][0]:fuse_fields[field][1]]
+
+	# Illegal if current and to_programmeed are both non-zeros
+	if any(i != 0 for i in curr) and any(i != 0 for i in to_prog):
+		raise Exception("Error: %s is already programmed" % field)
+	else:
+		# current or to_program are zeroes, new image field will be the non-zero value (or zero, in case both are)
+		for i in range(fuse_fields[field][0], fuse_fields[field][1]):
+			fuse_array_to_program[i] |= current_fuse_array[i]
+
+	return fuse_array_to_program
+
+def majority_check(current_fuse_array, fuse_array_to_program, field):
 
 	curr = current_fuse_array[fuse_fields[field][0]:fuse_fields[field][1]]
 	to_prog = fuse_array_to_program[fuse_fields[field][0]:fuse_fields[field][1]]
@@ -46,13 +69,26 @@ def check_field(current_fuse_array, fuse_array_to_program, field):
 
 	return fuse_array_to_program
 
+
+fuse_fields = {
+	'DAC_Calibration_Word': (16, 20, nubble_parity_check),
+	'ADC_Calibration_Word': (24, 28, nubble_parity_check),
+	'oFSAP': (52, -1, bit_check, (1, 3))
+}
+
+
+def check_field(current_fuse_array, fuse_array_to_program, field):
+
+	return fuse_fields[field][2](current_fuse_array, fuse_array_to_program, field)
+
+
 def check_fuse_bin(current_fuse_array, fuse_array_to_program):
 
 	origin_fuse_array_to_program = fuse_array_to_program[:]
 
 	# check fields, change the fuse array if needed
-	fuse_array_to_program = check_field(current_fuse_array, fuse_array_to_program, 'DAC_Calibration_Word')
-	fuse_array_to_program = check_field(current_fuse_array, fuse_array_to_program, 'ADC_Calibration_Word')
+	for field in fuse_fields:
+		fuse_array_to_program = check_field(current_fuse_array, fuse_array_to_program, field)
 
 	# check if the fuse array was changed
 	if cmp(origin_fuse_array_to_program, fuse_array_to_program) == 0:
@@ -78,7 +114,7 @@ def check_otp_bin(otp_name, current_otp_filename, otp_bin_filename):
 
 	for i in range(0, otp_size):
 		# check if there are 0's that are going to be written on '1's
-		if (not_8(current[i]) | (current[i] & to_program[i])) == 0:
+		if (not_8(current[i]) | (current[i] & to_program[i])) != 0xff:
 			new_image = True
 			print("byte %d (0x%x) cannot be programmed to the otp (current value is 0x%x)" % (i, to_program[i], current[i]))
 			to_program[i] |= current[i]
